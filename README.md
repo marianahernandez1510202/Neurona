@@ -1,7 +1,7 @@
 # 🧠 NEURONA ARTIFICIAL PARA PREDICCIÓN DE FUMADORES
 ## Documentación Técnica Completa
 
-**Autor:** Manuel Contreras Castillo  
+
 **Actividad:** Estructura de una neurona artificial  
 **Fecha:** Octubre 2024  
 **Dataset:** Smoking and Drinking Dataset (500,000 registros)  
@@ -660,7 +660,6 @@ Precisión alcanzada: 75.23%
 ❌ **Solo clasificación binaria** (fumador sí/no)  
 ❌ **No predice intensidad** (cuánto fuma)  
 ❌ **No considera factores** socioeconómicos o psicológicos  
-❌ **Sesgo del dataset** (datos de Corea del Sur)  
 ❌ **Correlación ≠ Causalidad** (factores asociados, no causales)  
 
 ### 9.4 Mejoras Futuras
@@ -709,16 +708,7 @@ Estudios epidemiológicos
 1. **Dataset**: Smoking and Drinking Dataset - Kaggle
 2. **TensorFlow Documentation**: https://www.tensorflow.org/
 3. **MongoDB Atlas**: https://www.mongodb.com/cloud/atlas
-4. **Actividad**: ACTIVIDAD 4: Estructura de una neurona artificial - Manuel Contreras Castillo
 
----
-
-## 📧 CONTACTO
-
-**Estudiante:** Manuel Contreras Castillo  
-**Materia:** Inteligencia Artificial  
-**Institución:** [Tu Institución]  
-**Fecha de Entrega:** Octubre 2024
 
 ---
 
