@@ -4,15 +4,15 @@ from pymongo import MongoClient
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+from sklearn.utils.class_weight import compute_class_weight
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # ============================================
-# 1. CONEXIÓN A MONGODB ATLAS
+# CONEXIÓN Y CARGA DE DATOS
 # ============================================
 
 def conectar_mongodb(uri=None, db_name="salud_db"):
-    """
-    Conecta a la base de datos MongoDB Atlas
-    """
     try:
         if uri is None:
             uri = "mongodb+srv://2022371082_db_user:marianahernandezdimas15102004@cluster0.gtmppy1.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
@@ -21,328 +21,617 @@ def conectar_mongodb(uri=None, db_name="salud_db"):
         client.admin.command('ping')
         
         db = client[db_name]
-        print(f"✓ Conexión exitosa a MongoDB Atlas - Base de datos: {db_name}")
+        print(f"Conexión exitosa a MongoDB Atlas - Base de datos: {db_name}")
         return db
     except Exception as e:
-        print(f"✗ Error al conectar: {e}")
+        print(f"Error al conectar: {e}")
         return None
 
-# ============================================
-# 2. CARGAR Y PROCESAR DATOS DESDE MONGODB
-# ============================================
-
 def cargar_y_procesar_datos(db):
-    """
-    Carga datos desde encuestas_fumadores y los procesa
-    """
     try:
-        print("\n📊 Cargando datos desde 'encuestas_fumadores'...")
+        print("\nCargando datos desde 'encuestas_fumadores'...")
         
-        # Cargar TODOS los datos de la colección original
-        print("  ️  Cargando todos los registros (esto puede tardar un momento)...")
         encuestas = db.encuestas_fumadores.find()
         datos = list(encuestas)
         
         if not datos:
-            print(" No hay datos en 'encuestas_fumadores'")
+            print("No hay datos en 'encuestas_fumadores'")
             return None
         
         df = pd.DataFrame(datos)
-        print(f"✓ Datos cargados: {len(df)} registros")
-        print(f"  Columnas disponibles: {len(df.columns)}")
-        
-        # ============================================
-        # PROCESAMIENTO: Convertir a variables booleanas
-        # ============================================
-        print(f"\n🔄 Procesando variables...")
+        print(f"Datos cargados: {len(df)} registros")
         
         df_procesado = pd.DataFrame()
         
-        # 1. VARIABLE OBJETIVO: Fumador (desde SMK_stat_type_cd)
-        # 1 = nunca fumó, 2 = ex-fumador, 3 = fumador actual
         if 'SMK_stat_type_cd' in df.columns:
             df_procesado['fuma'] = (df['SMK_stat_type_cd'] == 3).astype(int)
             fumadores = df_procesado['fuma'].sum()
-            print(f"  ✓ 'fuma': Creada desde SMK_stat_type_cd ({fumadores} fumadores)")
+            print(f"'fuma': Creada ({fumadores} fumadores)")
         else:
-            print(f"  ❌ No se encontró SMK_stat_type_cd")
             return None
         
-        # 2. Sexo (Male=1, Female=0)
         if 'sex' in df.columns:
             df_procesado['sexo_masculino'] = (df['sex'] == 'Male').astype(int)
-            print(f"  ✓ 'sexo_masculino': Creada")
         
-        # 3. Edad normalizada
         if 'age' in df.columns:
             edad_min, edad_max = df['age'].min(), df['age'].max()
             df_procesado['edad_normalizada'] = (df['age'] - edad_min) / (edad_max - edad_min)
-            print(f"  ✓ 'edad_normalizada': Creada")
         
-        # 4. Presión alta (SBP > 140)
         if 'SBP' in df.columns:
             df_procesado['presion_alta'] = (df['SBP'] > 140).astype(int)
-            print(f"  ✓ 'presion_alta': Creada")
         
-        # 5. Colesterol alto (tot_chole > 200)
         if 'tot_chole' in df.columns:
             df_procesado['colesterol_alto'] = (df['tot_chole'] > 200).astype(int)
-            print(f"  ✓ 'colesterol_alto': Creada")
         
-        # 6. Triglicéridos altos (> 150)
         if 'triglyceride' in df.columns:
             df_procesado['trigliceridos_altos'] = (df['triglyceride'] > 150).astype(int)
-            print(f"  ✓ 'trigliceridos_altos': Creada")
         
-        # 7. Glucosa alta (BLDS > 100)
         if 'BLDS' in df.columns:
             df_procesado['glucosa_alta'] = (df['BLDS'] > 100).astype(int)
-            print(f"  ✓ 'glucosa_alta': Creada")
         
-        # 8. Consumo de alcohol (DRK_YN = 'Y' → 1, 'N' → 0)
         if 'DRK_YN' in df.columns:
             df_procesado['bebe_alcohol'] = (df['DRK_YN'] == 'Y').astype(int)
-            print(f"  ✓ 'bebe_alcohol': Creada y convertida a 1/0")
         
-        # 9. IMC y obesidad
         if 'height' in df.columns and 'weight' in df.columns:
-            # Altura en cm, peso en kg
             altura_m = df['height'] / 100
             imc = df['weight'] / (altura_m ** 2)
             df_procesado['tiene_obesidad'] = (imc > 30).astype(int)
             df_procesado['tiene_sobrepeso'] = (imc > 25).astype(int)
-            print(f"  ✓ 'tiene_obesidad' y 'tiene_sobrepeso': Creadas")
         
-        # 10. Cintura alta (waistline > 90 hombres, > 85 mujeres)
         if 'waistline' in df.columns and 'sex' in df.columns:
             cintura_alta = []
-            for idx, row in df.iterrows():
+            for _, row in df.iterrows():
                 if row['sex'] == 'Male':
                     cintura_alta.append(1 if row['waistline'] > 90 else 0)
                 else:
                     cintura_alta.append(1 if row['waistline'] > 85 else 0)
             df_procesado['cintura_alta'] = cintura_alta
-            print(f"  ✓ 'cintura_alta': Creada")
         
-        # Eliminar filas con valores nulos
         df_procesado = df_procesado.dropna()
         
-        print(f"\n✓ Procesamiento completado:")
-        print(f"  • {len(df_procesado)} registros válidos")
-        print(f"  • {len(df_procesado.columns)} variables")
+        print(f"Procesamiento completado: {len(df_procesado)} registros válidos")
         
         return df_procesado
     
     except Exception as e:
-        print(f"✗ Error al cargar/procesar datos: {e}")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
         return None
 
 def preparar_dataset(df_procesado):
-    """
-    Prepara X (características) y y (etiquetas) para entrenamiento
-    """
-    # Todas las columnas excepto 'fuma'
     caracteristicas = [col for col in df_procesado.columns if col != 'fuma']
     
     if not caracteristicas:
-        print(" No se encontraron características")
-        return None, None, None
+        return None, None, None, None
     
     X = df_procesado[caracteristicas].values.astype(np.float32)
     y = df_procesado['fuma'].values.astype(np.float32)
     
-    print(f"\n✓ Dataset preparado:")
-    print(f"  • {X.shape[0]} muestras")
-    print(f"  • {X.shape[1]} características: {caracteristicas}")
-    print(f"  • Fumadores: {int(y.sum())} ({(y.sum()/len(y))*100:.1f}%)")
-    print(f"  • No fumadores: {int(len(y) - y.sum())} ({((len(y)-y.sum())/len(y))*100:.1f}%)")
+    print(f"\nDataset: {X.shape[0]} muestras, {X.shape[1]} características")
+    print(f"Fumadores: {int(y.sum())} ({(y.sum()/len(y))*100:.1f}%)")
     
-    return X, y, caracteristicas
+    # Pesos balanceados pero suavizados
+    class_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=y)
+    class_weights = np.sqrt(class_weights)  # Suavizar
+    
+    print(f"\n⚖️ PESOS SUAVIZADOS:")
+    print(f"  No Fumador: {class_weights[0]:.3f}")
+    print(f"  Fumador:    {class_weights[1]:.3f}")
+    
+    return X, y, caracteristicas, class_weights
 
 # ============================================
-# 3. NEURONA ARTIFICIAL CON ENTRENAMIENTO
+# RED NEURONAL CON EXACTAMENTE 2 NODOS
 # ============================================
 
-class NeuronaEntrenada:
+class RedDosNodosMejorada:
     """
-    Neurona artificial que puede ser ENTRENADA
+    Red con EXACTAMENTE 2 NODOS:
+    - NODO 1: Capa oculta (1 neurona)
+    - NODO 2: Capa salida (1 neurona) con operaciones matemáticas
     """
     
-    def __init__(self, num_entradas, learning_rate=0.01):
+    def __init__(self, num_entradas, class_weights, learning_rate=0.001):
         self.num_entradas = num_entradas
         self.learning_rate = learning_rate
+        self.class_weights = tf.constant(class_weights, dtype=tf.float32)
         
-        # Inicializar pesos y sesgo
-        self.pesos = tf.Variable(
-            tf.random.normal([num_entradas, 1], mean=0.0, stddev=0.1),
-            name='pesos',
-            trainable=True
-        )
-        self.sesgo = tf.Variable(
-            tf.zeros([1]),
-            name='sesgo',
-            trainable=True
-        )
+        # Inicialización He
+        limit = np.sqrt(2.0 / num_entradas)
         
-        # Historial
+        # NODO 1: Capa oculta (1 NEURONA)
+        self.W1 = tf.Variable(
+            tf.random.uniform([num_entradas, 1], -limit, limit),
+            name='W1_nodo1', trainable=True
+        )
+        self.b1 = tf.Variable(tf.zeros([1]), name='b1_nodo1', trainable=True)
+        
+        # NODO 2: Capa salida (1 NEURONA)
+        self.W2 = tf.Variable(
+            tf.random.uniform([1, 1], -limit, limit),
+            name='W2_nodo2', trainable=True
+        )
+        self.b2 = tf.Variable(tf.zeros([1]), name='b2_nodo2', trainable=True)
+        
+        # Parámetros de operaciones matemáticas en NODO 2
+        self.alpha = tf.Variable(1.0, name='alpha_nodo2', trainable=True)
+        self.beta = tf.Variable(1.0, name='beta_nodo2', trainable=True)
+        self.gamma = tf.Variable(0.5, name='gamma_nodo2', trainable=True)
+        
         self.historial_perdida = []
         self.historial_precision = []
+        self.historial_perdida_val = []
+        self.historial_precision_val = []
+        self.historial_f1_val = []
+        self.historial_operaciones = []
         
-        print(f"\n✓ Neurona creada:")
-        print(f"  • {num_entradas} entradas")
-        print(f"  • Tasa de aprendizaje: {learning_rate}")
-        print(f"  • Pesos: {self.pesos.shape}")
+        print(f"\n🧠 RED CON EXACTAMENTE 2 NODOS")
+        print(f"="*60)
+        print(f"NODO 1 (Oculta): {num_entradas} entradas → 1 neurona")
+        print(f"NODO 2 (Salida): 1 entrada → 1 neurona + operaciones matemáticas")
+        print(f"  • Operaciones en Nodo 2: α, β, γ, potencias, productos")
+        print(f"Learning rate: {learning_rate}")
+        print(f"="*60)
     
     def forward(self, X):
-        """Propagación hacia adelante"""
-        z = tf.matmul(X, self.pesos) + self.sesgo
-        return tf.sigmoid(z)
-    
-    def calcular_perdida(self, y_pred, y_real):
-        """Función de pérdida (Binary Cross-Entropy)"""
-        y_pred = tf.clip_by_value(y_pred, 1e-7, 1 - 1e-7)
-        perdida = -tf.reduce_mean(
-            y_real * tf.math.log(y_pred) + 
-            (1 - y_real) * tf.math.log(1 - y_pred)
+        """Forward pass con EXACTAMENTE 2 NODOS"""
+        # NODO 1: Transformación de entrada
+        z1 = tf.matmul(X, self.W1) + self.b1
+        h1 = tf.nn.tanh(z1)  # tanh para rango [-1, 1]
+        
+        # NODO 2: Operaciones matemáticas avanzadas
+        # Operación 1: Combinación lineal base
+        z2_base = tf.matmul(h1, self.W2) + self.b2
+        
+        # Operación 2: Potencia ajustable
+        beta_clip = tf.clip_by_value(self.beta, 0.3, 3.0)
+        h1_abs = tf.abs(h1)
+        h1_powered = tf.pow(h1_abs + 1e-7, beta_clip)
+        
+        # Operación 3: Componente cuadrático
+        h1_squared = tf.square(h1)
+        
+        # Operación 4: Producto de Hadamard
+        hadamard = h1 * h1_powered
+        
+        # Operación 5: Combinación no lineal avanzada
+        z2_enhanced = (
+            z2_base + 
+            self.alpha * h1_powered + 
+            self.gamma * h1_squared +
+            0.1 * hadamard
         )
-        return perdida
+        
+        # Operación 6: Sigmoid
+        y_pred = tf.sigmoid(z2_enhanced)
+        
+        return y_pred, h1, z2_base, h1_powered, h1_squared, hadamard
     
-    def entrenar(self, X_train, y_train, X_val, y_val, epochs=100, verbose=True):
-        """AQUÍ ES DONDE LA NEURONA APRENDE"""
+    def calcular_perdida_focal(self, y_pred, y_real, gamma=2.0):
+        """Focal Loss para manejar desbalance"""
+        epsilon = 1e-7
+        y_pred_clip = tf.clip_by_value(y_pred, epsilon, 1 - epsilon)
         
-        print(f"\n{'='*60}")
-        print("🎓 INICIANDO ENTRENAMIENTO")
-        print(f"{'='*60}\n")
+        # Focal loss
+        p_t = tf.where(tf.equal(y_real, 1.0), y_pred_clip, 1 - y_pred_clip)
+        focal_weight = tf.pow(1 - p_t, gamma)
         
-        # Convertir a tensores
+        bce = -(
+            y_real * tf.math.log(y_pred_clip) + 
+            (1 - y_real) * tf.math.log(1 - y_pred_clip)
+        )
+        
+        focal_loss = focal_weight * bce
+        
+        # Pesos por clase
+        weights = tf.where(
+            tf.equal(y_real, 1.0),
+            self.class_weights[1],
+            self.class_weights[0]
+        )
+        
+        weighted_loss = focal_loss * weights
+        
+        # Regularización L2
+        l2_loss = 0.0001 * (
+            tf.reduce_sum(tf.square(self.W1)) + 
+            tf.reduce_sum(tf.square(self.W2))
+        )
+        
+        return tf.reduce_mean(weighted_loss) + l2_loss
+    
+    def entrenar(self, X_train, y_train, X_val, y_val, epochs=500, verbose=True):
+        print(f"\n⚡ ENTRENAMIENTO - 2 NODOS CON FOCAL LOSS\n")
+        
         X_train = tf.constant(X_train, dtype=tf.float32)
         y_train = tf.constant(y_train.reshape(-1, 1), dtype=tf.float32)
         X_val = tf.constant(X_val, dtype=tf.float32)
         y_val = tf.constant(y_val.reshape(-1, 1), dtype=tf.float32)
         
-        # Optimizador
-        optimizer = tf.optimizers.SGD(learning_rate=self.learning_rate)
+        optimizer = tf.optimizers.Adam(learning_rate=self.learning_rate)
         
-        mejor_perdida_val = float('inf')
+        mejor_f1 = 0.0
         sin_mejora = 0
-        paciencia = 10
+        paciencia = 50
         
         for epoch in range(epochs):
-            # PASO 1: Forward pass
             with tf.GradientTape() as tape:
-                y_pred = self.forward(X_train)
-                perdida = self.calcular_perdida(y_pred, y_train)
+                y_pred, h1, z2_base, h1_pow, h1_sq, hadam = self.forward(X_train)
+                perdida = self.calcular_perdida_focal(y_pred, y_train)
             
-            # PASO 2: Backward pass (calcular gradientes)
-            gradientes = tape.gradient(perdida, [self.pesos, self.sesgo])
+            variables = [self.W1, self.b1, self.W2, self.b2, self.alpha, self.beta, self.gamma]
+            gradientes = tape.gradient(perdida, variables)
+            gradientes_clip = [tf.clip_by_value(g, -1.0, 1.0) if g is not None else g for g in gradientes]
             
-            # PASO 3: Actualizar pesos (AQUÍ APRENDE)
-            optimizer.apply_gradients(zip(gradientes, [self.pesos, self.sesgo]))
+            optimizer.apply_gradients(zip(gradientes_clip, variables))
             
-            # Calcular precisión
+            # Métricas
             y_pred_train = (y_pred > 0.5).numpy().astype(int)
             precision_train = accuracy_score(y_train.numpy(), y_pred_train)
             
-            # Evaluar en validación
-            y_pred_val = self.forward(X_val)
-            perdida_val = self.calcular_perdida(y_pred_val, y_val)
+            # Validación
+            y_pred_val, _, _, _, _, _ = self.forward(X_val)
+            perdida_val = self.calcular_perdida_focal(y_pred_val, y_val)
             y_pred_val_class = (y_pred_val > 0.5).numpy().astype(int)
             precision_val = accuracy_score(y_val.numpy(), y_pred_val_class)
             
-            # Guardar historial
+            from sklearn.metrics import f1_score
+            f1_val = f1_score(y_val.numpy(), y_pred_val_class)
+            
             self.historial_perdida.append(perdida.numpy())
             self.historial_precision.append(precision_train)
+            self.historial_perdida_val.append(perdida_val.numpy())
+            self.historial_precision_val.append(precision_val)
+            self.historial_f1_val.append(f1_val)
             
-            # Mostrar progreso cada 10 epochs
-            if verbose and (epoch + 1) % 10 == 0:
+            self.historial_operaciones.append({
+                'alpha': self.alpha.numpy(),
+                'beta': self.beta.numpy(),
+                'gamma': self.gamma.numpy(),
+                'h1_mean': tf.reduce_mean(h1).numpy(),
+                'h1_std': tf.math.reduce_std(h1).numpy()
+            })
+            
+            if verbose and (epoch + 1) % 50 == 0:
                 print(f"Epoch {epoch+1}/{epochs}")
-                print(f"  Loss Train: {perdida:.4f} | Acc Train: {precision_train:.4f}")
-                print(f"  Loss Val:   {perdida_val:.4f} | Acc Val:   {precision_val:.4f}")
-                print()
+                print(f"  Train → Loss: {perdida:.4f} | Acc: {precision_train:.4f}")
+                print(f"  Val   → Loss: {perdida_val:.4f} | Acc: {precision_val:.4f} | F1: {f1_val:.4f}")
+                print(f"  NODO 2 → α={self.alpha.numpy():.3f} | β={self.beta.numpy():.3f} | γ={self.gamma.numpy():.3f}\n")
             
-            # Early stopping
-            if perdida_val < mejor_perdida_val:
-                mejor_perdida_val = perdida_val
+            if f1_val > mejor_f1:
+                mejor_f1 = f1_val
                 sin_mejora = 0
             else:
                 sin_mejora += 1
                 if sin_mejora >= paciencia:
-                    print(f"️ Early stopping en epoch {epoch+1}")
+                    print(f"✓ Early stopping (Mejor F1: {mejor_f1:.4f})")
                     break
         
-        print(f"{'='*60}")
-        print("✅ ENTRENAMIENTO COMPLETADO")
-        print(f"{'='*60}\n")
-        print(f"📊 Resultados finales:")
-        print(f"  • Pérdida final (train): {perdida:.4f}")
-        print(f"  • Precisión final (train): {precision_train:.4f}")
-        print(f"  • Pérdida final (val): {perdida_val:.4f}")
-        print(f"  • Precisión final (val): {precision_val:.4f}")
+        print(f"\n✓ ENTRENAMIENTO COMPLETADO")
+        print(f"  Mejor F1-Score: {mejor_f1:.4f}")
+        print(f"  Parámetros finales Nodo 2:")
+        print(f"    α = {self.alpha.numpy():.4f}")
+        print(f"    β = {self.beta.numpy():.4f}")
+        print(f"    γ = {self.gamma.numpy():.4f}")
     
     def predecir(self, X):
-        """Hace predicciones"""
         X_tensor = tf.constant(X, dtype=tf.float32)
-        probabilidades = self.forward(X_tensor)
-        predicciones = (probabilidades > 0.5).numpy().astype(int)
-        return probabilidades.numpy(), predicciones
+        y_pred, _, _, _, _, _ = self.forward(X_tensor)
+        probabilidades = y_pred.numpy()
+        predicciones = (probabilidades > 0.5).astype(int)
+        return probabilidades, predicciones
     
     def evaluar(self, X_test, y_test):
-        """Evalúa el rendimiento"""
         probabilidades, predicciones = self.predecir(X_test)
+        
+        from sklearn.metrics import classification_report, f1_score, recall_score, precision_score
         
         precision = accuracy_score(y_test, predicciones)
         matriz_conf = confusion_matrix(y_test, predicciones)
-        reporte = classification_report(y_test, predicciones, 
-                                       target_names=['No Fumador', 'Fumador'])
+        f1 = f1_score(y_test, predicciones)
+        recall = recall_score(y_test, predicciones)
+        precision_score_val = precision_score(y_test, predicciones)
         
-        print(f"\n{'='*60}")
-        print("📈 EVALUACIÓN EN TEST")
-        print(f"{'='*60}\n")
-        print(f"Precisión (Accuracy): {precision:.4f} ({precision*100:.2f}%)\n")
-        
-        print("Matriz de Confusión:")
-        print(f"                 Predicho No | Predicho Sí")
-        print(f"Real No Fuma:    {matriz_conf[0][0]:>11} | {matriz_conf[0][1]:>11}")
-        print(f"Real Sí Fuma:    {matriz_conf[1][0]:>11} | {matriz_conf[1][1]:>11}")
-        print()
-        
-        print("Reporte de Clasificación:")
-        print(reporte)
+        print("\n📊 EVALUACIÓN FINAL - 2 NODOS")
+        print(f"Accuracy:   {precision:.4f} ({precision*100:.2f}%)")
+        print(f"F1-Score:   {f1:.4f}")
+        print(f"Recall:     {recall:.4f} (% fumadores detectados)")
+        print(f"Precision:  {precision_score_val:.4f} (precisión fumadores)")
+        print("\nMatriz de Confusión:")
+        print(matriz_conf)
+        print("\n" + classification_report(y_test, predicciones, target_names=['No Fumador', 'Fumador']))
         
         return precision, matriz_conf
 
 # ============================================
-# 4. FUNCIÓN PRINCIPAL
+# GRÁFICAS DE DISPERSIÓN
+# ============================================
+
+def graficar_dispersion_datos(X, y, caracteristicas):
+    """Gráfica de dispersión de datos por característica"""
+    num_features = min(6, X.shape[1])
+    
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.ravel()
+    
+    colores = ['blue' if label == 0 else 'red' for label in y]
+    
+    for i in range(num_features):
+        axes[i].scatter(range(len(X)), X[:, i], c=colores, alpha=0.5, s=20, edgecolors='black', linewidth=0.3)
+        axes[i].set_xlabel('Índice de Muestra', fontsize=11)
+        axes[i].set_ylabel('Valor', fontsize=11)
+        axes[i].set_title(f'{caracteristicas[i]}', fontsize=12, fontweight='bold')
+        axes[i].grid(True, alpha=0.3)
+        
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='blue', label='No Fumador'),
+            Patch(facecolor='red', label='Fumador')
+        ]
+        axes[i].legend(handles=legend_elements, loc='upper right', fontsize=9)
+    
+    # Ocultar axes sobrantes
+    for idx in range(num_features, 6):
+        axes[idx].axis('off')
+    
+    plt.tight_layout()
+    plt.savefig('dispersion_datos.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Gráfica guardada: dispersion_datos.png")
+
+
+def graficar_dispersion_2d(X, y, caracteristicas):
+    """Gráfica de dispersión 2D entre pares de características"""
+    num_features = min(4, X.shape[1])
+    
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.ravel()
+    
+    colores = ['blue' if label == 0 else 'red' for label in y]
+    
+    pair_idx = 0
+    for i in range(num_features):
+        for j in range(i+1, num_features):
+            if pair_idx >= 6:
+                break
+            
+            axes[pair_idx].scatter(X[:, i], X[:, j], c=colores, alpha=0.5, s=30, edgecolors='black', linewidth=0.3)
+            axes[pair_idx].set_xlabel(f'{caracteristicas[i]}', fontsize=10)
+            axes[pair_idx].set_ylabel(f'{caracteristicas[j]}', fontsize=10)
+            axes[pair_idx].set_title(f'{caracteristicas[i]} vs {caracteristicas[j]}', 
+                                    fontsize=11, fontweight='bold')
+            axes[pair_idx].grid(True, alpha=0.3)
+            
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor='blue', label='No Fumador'),
+                Patch(facecolor='red', label='Fumador')
+            ]
+            axes[pair_idx].legend(handles=legend_elements, loc='best', fontsize=8)
+            
+            pair_idx += 1
+            if pair_idx >= 6:
+                break
+    
+    # Ocultar axes sobrantes
+    for idx in range(pair_idx, 6):
+        axes[idx].axis('off')
+    
+    plt.tight_layout()
+    plt.savefig('dispersion_2d_pares.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Gráfica guardada: dispersion_2d_pares.png")
+
+
+def graficar_dispersion_residuales(y_test, probabilidades):
+    """Gráfica de dispersión de ajustes vs valores reales y residuales"""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Gráfica 1: Predicción vs Real
+    colores = ['blue' if y == 0 else 'red' for y in y_test]
+    ax1.scatter(y_test, probabilidades, alpha=0.6, s=50, c=colores, edgecolors='black', linewidth=0.5)
+    ax1.plot([0, 1], [0, 1], 'r--', linewidth=2, label='Predicción Perfecta')
+    ax1.axhline(y=0.5, color='green', linestyle='--', linewidth=1.5, alpha=0.7, label='Umbral (0.5)')
+    ax1.set_xlabel('Valores Reales (0=No Fumador, 1=Fumador)', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Probabilidades Predichas', fontsize=12, fontweight='bold')
+    ax1.set_title('Dispersión: Predicción vs Real', fontsize=14, fontweight='bold')
+    ax1.legend(fontsize=11)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim([-0.1, 1.1])
+    ax1.set_ylim([-0.1, 1.1])
+    
+    # Gráfica 2: Residuales
+    residuales = y_test - probabilidades.flatten()
+    ax2.scatter(probabilidades, residuales, alpha=0.6, s=50, c=colores, edgecolors='black', linewidth=0.5)
+    ax2.axhline(y=0, color='red', linestyle='--', linewidth=2, label='Residual = 0')
+    ax2.set_xlabel('Probabilidades Predichas', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('Residuales (Real - Predicción)', fontsize=12, fontweight='bold')
+    ax2.set_title('Gráfica de Residuales', fontsize=14, fontweight='bold')
+    ax2.legend(fontsize=11)
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('dispersion_residuales.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Gráfica guardada: dispersion_residuales.png")
+
+
+def graficar_correlacion_caracteristicas(X, caracteristicas):
+    """Matriz de correlación entre características"""
+    df_features = pd.DataFrame(X, columns=caracteristicas)
+    correlacion = df_features.corr()
+    
+    fig, ax = plt.subplots(figsize=(12, 10))
+    sns.heatmap(correlacion, annot=True, fmt='.2f', cmap='coolwarm', 
+                center=0, square=True, linewidths=1, cbar_kws={"shrink": 0.8},
+                annot_kws={'fontsize': 9})
+    
+    ax.set_title('Matriz de Correlación entre Características', 
+                 fontsize=14, fontweight='bold', pad=20)
+    
+    plt.tight_layout()
+    plt.savefig('correlacion_caracteristicas.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Gráfica guardada: correlacion_caracteristicas.png")
+
+# ============================================
+# OTRAS GRÁFICAS
+# ============================================
+
+def graficar_distribucion_final(probabilidades, y_test):
+    """Distribución de probabilidades"""
+    fig, ax = plt.subplots(figsize=(14, 7))
+    
+    probs_no_fumador = probabilidades[y_test == 0]
+    probs_fumador = probabilidades[y_test == 1]
+    
+    ax.hist(probs_no_fumador, bins=60, alpha=0.7, color='blue', 
+            label=f'No Fumadores (n={len(probs_no_fumador)})', 
+            edgecolor='black', linewidth=0.5)
+    ax.hist(probs_fumador, bins=60, alpha=0.7, color='red', 
+            label=f'Fumadores (n={len(probs_fumador)})', 
+            edgecolor='black', linewidth=0.5)
+    ax.axvline(x=0.5, color='green', linestyle='--', linewidth=3, label='Umbral (0.5)')
+    
+    ax.text(0.02, 0.98, 
+            f'No Fumadores:\n  Media: {np.mean(probs_no_fumador):.3f}\n  Std: {np.std(probs_no_fumador):.3f}',
+            transform=ax.transAxes, fontsize=11, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='blue', alpha=0.3))
+    
+    ax.text(0.98, 0.98, 
+            f'Fumadores:\n  Media: {np.mean(probs_fumador):.3f}\n  Std: {np.std(probs_fumador):.3f}',
+            transform=ax.transAxes, fontsize=11, verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='red', alpha=0.3))
+    
+    ax.set_xlabel('Probabilidad de ser Fumador', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Frecuencia', fontsize=13, fontweight='bold')
+    ax.set_title('Distribución - RED DE 2 NODOS', fontsize=15, fontweight='bold')
+    ax.legend(fontsize=12)
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    plt.savefig('distribucion_2_nodos.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Gráfica guardada: distribucion_2_nodos.png")
+
+
+def graficar_matriz_confusion_2nodos(matriz_conf):
+    """Matriz de confusión"""
+    fig, ax = plt.subplots(figsize=(9, 7))
+    
+    sns.heatmap(matriz_conf, annot=True, fmt='d', cmap='RdYlGn_r', 
+                xticklabels=['No Fumador', 'Fumador'],
+                yticklabels=['No Fumador', 'Fumador'],
+                cbar_kws={'label': 'Cantidad'}, annot_kws={'fontsize': 14})
+    
+    ax.set_xlabel('Predicción', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Valor Real', fontsize=13, fontweight='bold')
+    ax.set_title('Matriz de Confusión - 2 NODOS', fontsize=15, fontweight='bold', pad=20)
+    
+    plt.tight_layout()
+    plt.savefig('matriz_2_nodos.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Gráfica guardada: matriz_2_nodos.png")
+
+
+def graficar_operaciones_nodo2(red):
+    """Gráfica de las operaciones matemáticas del Nodo 2"""
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    epochs = range(1, len(red.historial_operaciones) + 1)
+    
+    alphas = [op['alpha'] for op in red.historial_operaciones]
+    betas = [op['beta'] for op in red.historial_operaciones]
+    gammas = [op['gamma'] for op in red.historial_operaciones]
+    h1_means = [op['h1_mean'] for op in red.historial_operaciones]
+    
+    # Alpha
+    axes[0, 0].plot(epochs, alphas, 'b-', linewidth=2)
+    axes[0, 0].set_xlabel('Época')
+    axes[0, 0].set_ylabel('α')
+    axes[0, 0].set_title('Evolución de α (Nodo 2)', fontweight='bold')
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # Beta
+    axes[0, 1].plot(epochs, betas, 'g-', linewidth=2)
+    axes[0, 1].set_xlabel('Época')
+    axes[0, 1].set_ylabel('β')
+    axes[0, 1].set_title('Evolución de β (Nodo 2)', fontweight='bold')
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    # Gamma
+    axes[1, 0].plot(epochs, gammas, 'r-', linewidth=2)
+    axes[1, 0].set_xlabel('Época')
+    axes[1, 0].set_ylabel('γ')
+    axes[1, 0].set_title('Evolución de γ (Nodo 2)', fontweight='bold')
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    # Salida Nodo 1
+    axes[1, 1].plot(epochs, h1_means, 'm-', linewidth=2)
+    axes[1, 1].set_xlabel('Época')
+    axes[1, 1].set_ylabel('Salida media h₁')
+    axes[1, 1].set_title('Salida promedio del Nodo 1', fontweight='bold')
+    axes[1, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('operaciones_nodo2.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Gráfica guardada: operaciones_nodo2.png")
+
+
+def graficar_entrenamiento(red):
+    """Gráfica del progreso de entrenamiento"""
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    
+    epochs = range(1, len(red.historial_perdida) + 1)
+    
+    # Loss
+    axes[0].plot(epochs, red.historial_perdida, 'b-', label='Train Loss', linewidth=2)
+    axes[0].plot(epochs, red.historial_perdida_val, 'r-', label='Val Loss', linewidth=2)
+    axes[0].set_xlabel('Época', fontsize=12)
+    axes[0].set_ylabel('Pérdida', fontsize=12)
+    axes[0].set_title('Pérdida durante Entrenamiento', fontsize=14, fontweight='bold')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    
+    # Accuracy y F1
+    axes[1].plot(epochs, red.historial_precision, 'b-', label='Train Acc', linewidth=2)
+    axes[1].plot(epochs, red.historial_precision_val, 'r-', label='Val Acc', linewidth=2)
+    axes[1].plot(epochs, red.historial_f1_val, 'g--', label='Val F1', linewidth=2)
+    axes[1].set_xlabel('Época', fontsize=12)
+    axes[1].set_ylabel('Métrica', fontsize=12)
+    axes[1].set_title('Métricas durante Entrenamiento', fontsize=14, fontweight='bold')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+    axes[1].set_ylim([0, 1])
+    
+    plt.tight_layout()
+    plt.savefig('entrenamiento_2_nodos.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Gráfica guardada: entrenamiento_2_nodos.png")
+
+# ============================================
+# FUNCIÓN PRINCIPAL
 # ============================================
 
 def main():
-    """
-    Flujo completo: Cargar → Entrenar → Evaluar
-    """
-    print("\n" + "="*60)
-    print("NEURONA ARTIFICIAL CON ENTRENAMIENTO")
-    print("Análisis de Fumadores - MongoDB Atlas")
+    print("\n🧠 RED NEURONAL CON EXACTAMENTE 2 NODOS")
     print("="*60)
     
-    # 1. Conectar a MongoDB
     db = conectar_mongodb()
     if db is None:
         return
     
-    # 2. Cargar y procesar datos
     df_procesado = cargar_y_procesar_datos(db)
     if df_procesado is None:
         return
     
-    # 3. Preparar dataset
-    X, y, caracteristicas = preparar_dataset(df_procesado)
+    X, y, caracteristicas, class_weights = preparar_dataset(df_procesado)
     if X is None:
         return
     
-    # 4. Dividir en train, validation y test (60%, 20%, 20%)
-    print(f"\n📊 Dividiendo datos en train/val/test...")
+    # Dividir datos
     X_temp, X_test, y_temp, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
@@ -350,50 +639,66 @@ def main():
         X_temp, y_temp, test_size=0.25, random_state=42, stratify=y_temp
     )
     
-    print(f"  • Train: {len(X_train)} muestras ({len(X_train)/len(X)*100:.1f}%)")
-    print(f"  • Val:   {len(X_val)} muestras ({len(X_val)/len(X)*100:.1f}%)")
-    print(f"  • Test:  {len(X_test)} muestras ({len(X_test)/len(X)*100:.1f}%)")
+    print(f"\n📊 Datos: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
     
-    # 5. Crear neurona
-    neurona = NeuronaEntrenada(
+    # Gráficas de dispersión de datos (ANTES del entrenamiento)
+    print("\n📊 Generando gráficas de dispersión de datos...")
+    graficar_dispersion_datos(X, y, caracteristicas)
+    graficar_dispersion_2d(X, y, caracteristicas)
+    graficar_correlacion_caracteristicas(X, caracteristicas)
+    
+    # Crear red con 2 NODOS
+    red = RedDosNodosMejorada(
         num_entradas=X.shape[1],
-        learning_rate=0.1
+        class_weights=class_weights,
+        learning_rate=0.0005
     )
     
-    # 6. ENTRENAR (¡AQUÍ ES DONDE APRENDE!)
-    neurona.entrenar(
-        X_train, y_train,
-        X_val, y_val,
-        epochs=100,
-        verbose=True
-    )
+    # Entrenar
+    red.entrenar(X_train, y_train, X_val, y_val, epochs=500, verbose=True)
     
-    # 7. Evaluar en conjunto de test
-    precision, matriz = neurona.evaluar(X_test, y_test)
+    # Evaluar
+    precision, matriz = red.evaluar(X_test, y_test)
     
-    # 8. Mostrar algunos ejemplos
-    print(f"\n{'='*60}")
-    print("🔍 EJEMPLOS DE PREDICCIONES")
-    print(f"{'='*60}\n")
+    # Ejemplos
+    print("\n📋 EJEMPLOS DE PREDICCIONES:")
+    indices_fumadores = np.where(y_test == 1)[0][:5]
+    indices_no_fumadores = np.where(y_test == 0)[0][:5]
+    indices = np.concatenate([indices_no_fumadores, indices_fumadores])
     
-    probabilidades, predicciones = neurona.predecir(X_test[:10])
+    probs, preds = red.predecir(X_test[indices])
     
-    for i in range(10):
-        print(f"Ejemplo {i+1}:")
-        print(f"  Probabilidad: {probabilidades[i][0]:.4f}")
-        print(f"  Predicción: {'🚬 FUMADOR' if predicciones[i][0] == 1 else '🚭 NO FUMADOR'}")
-        print(f"  Real: {'🚬 FUMADOR' if y_test[i] == 1 else '🚭 NO FUMADOR'}")
-        print(f"  {'✓ CORRECTO' if predicciones[i][0] == y_test[i] else '✗ INCORRECTO'}")
-        print()
+    for idx, i in enumerate(indices):
+        print(f"  {idx+1}. Prob: {probs[idx][0]:.3f} → "
+              f"{'FUMADOR' if preds[idx][0] == 1 else 'NO FUMADOR'} "
+              f"(Real: {'FUMADOR' if y_test[i] == 1 else 'NO FUMADOR'}) "
+              f"{'✓' if preds[idx][0] == y_test[i] else '✗'}")
     
+    # Gráficas (DESPUÉS del entrenamiento)
+    print("\n📊 Generando gráficas de resultados...")
+    probs_completas, _ = red.predecir(X_test)
+    
+    graficar_dispersion_residuales(y_test, probs_completas)
+    graficar_distribucion_final(probs_completas, y_test)
+    graficar_matriz_confusion_2nodos(matriz)
+    graficar_operaciones_nodo2(red)
+    graficar_entrenamiento(red)
+    
+    print("\n" + "="*60)
+    print("✅ RED DE 2 NODOS ENTRENADA")
+    print(f"NODO 1: {red.num_entradas} → 1 (tanh)")
+    print(f"NODO 2: 1 → 1 (α, β, γ + operaciones)")
+    print(f"Total: EXACTAMENTE 2 NODOS")
+    print("\n📊 GRÁFICAS GENERADAS:")
+    print("  1. dispersion_datos.png")
+    print("  2. dispersion_2d_pares.png")
+    print("  3. correlacion_caracteristicas.png")
+    print("  4. dispersion_residuales.png")
+    print("  5. distribucion_2_nodos.png")
+    print("  6. matriz_2_nodos.png")
+    print("  7. operaciones_nodo2.png")
+    print("  8. entrenamiento_2_nodos.png")
     print("="*60)
-    print("\n✅ ¡LA NEURONA HA APRENDIDO!")
-    print(f"\n📝 Resumen:")
-    print(f"  • La neurona ajustó sus pesos durante el entrenamiento")
-    print(f"  • Precisión alcanzada: {precision*100:.2f}%")
-    print(f"  • Características usadas: {len(caracteristicas)}")
-    print(f"  • Total de parámetros: {neurona.num_entradas + 1}")
-    print(f"\n💾 Datos: MongoDB Atlas → salud_db → encuestas_fumadores")
 
 if __name__ == "__main__":
     main()
