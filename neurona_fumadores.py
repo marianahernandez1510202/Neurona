@@ -111,11 +111,11 @@ def preparar_dataset(df_procesado):
     print(f"\nDataset: {X.shape[0]} muestras, {X.shape[1]} características")
     print(f"Fumadores: {int(y.sum())} ({(y.sum()/len(y))*100:.1f}%)")
     
-    # Pesos balanceados pero suavizados
+    # CAMBIO: Pesos más conservadores para evitar predicción constante
     class_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=y)
-    class_weights = np.sqrt(class_weights)  # Suavizar
+    class_weights = class_weights * 0.6  # Suavizar más agresivamente
     
-    print(f"\n⚖️ PESOS SUAVIZADOS:")
+    print(f"\n⚖️ PESOS AJUSTADOS:")
     print(f"  No Fumador: {class_weights[0]:.3f}")
     print(f"  Fumador:    {class_weights[1]:.3f}")
     
@@ -263,11 +263,13 @@ class RedTresNodosMejorada:
         
         return tf.reduce_mean(weighted_loss) + l2_loss
     
-    def entrenar(self, X_train, y_train, X_val, y_val, epochs=500, verbose=True):
-        print(f"\n⚡ ENTRENAMIENTO - 3 NODOS CON FOCAL LOSS\n")
+    def entrenar(self, X_train, y_train, X_val, y_val, epochs=500, batch_size=1024, verbose=True):
+        print(f"\n⚡ ENTRENAMIENTO - 3 NODOS CON FOCAL LOSS + BATCH TRAINING\n")
+        print(f"Batch size: {batch_size}")
         
-        X_train = tf.constant(X_train, dtype=tf.float32)
-        y_train = tf.constant(y_train.reshape(-1, 1), dtype=tf.float32)
+        # Mantener numpy para batches
+        X_train_np = X_train
+        y_train_np = y_train.reshape(-1, 1)
         X_val = tf.constant(X_val, dtype=tf.float32)
         y_val = tf.constant(y_val.reshape(-1, 1), dtype=tf.float32)
         
@@ -275,39 +277,61 @@ class RedTresNodosMejorada:
         
         mejor_f1 = 0.0
         sin_mejora = 0
-        paciencia = 50
+        paciencia = 100  # Aumentado
+        
+        num_batches = len(X_train_np) // batch_size
+        print(f"Batches por época: {num_batches}\n")
         
         for epoch in range(epochs):
-            with tf.GradientTape() as tape:
-                y_pred, h1, h2, h2_pow, h2_sq, h2_exp, hadam = self.forward(X_train)
-                perdida = self.calcular_perdida_focal(y_pred, y_train)
+            # Mezclar datos cada época
+            indices = np.random.permutation(len(X_train_np))
+            X_train_shuffled = X_train_np[indices]
+            y_train_shuffled = y_train_np[indices]
             
-            # Variables a entrenar
-            variables = [
-                self.W1, self.b1,      # Nodo 1
-                self.W2, self.b2,      # Nodo 2
-                self.W3, self.b3,      # Nodo 3
-                self.alpha, self.beta, self.gamma, self.delta  # Pesos ajustables
-            ]
-            gradientes = tape.gradient(perdida, variables)
-            gradientes_clip = [tf.clip_by_value(g, -1.0, 1.0) if g is not None else g for g in gradientes]
+            epoch_loss = []
+            epoch_acc = []
             
-            optimizer.apply_gradients(zip(gradientes_clip, variables))
+            # Entrenar por batches
+            for i in range(num_batches):
+                start_idx = i * batch_size
+                end_idx = start_idx + batch_size
+                
+                X_batch = tf.constant(X_train_shuffled[start_idx:end_idx], dtype=tf.float32)
+                y_batch = tf.constant(y_train_shuffled[start_idx:end_idx], dtype=tf.float32)
+                
+                with tf.GradientTape() as tape:
+                    y_pred, h1, h2, h2_pow, h2_sq, h2_exp, hadam = self.forward(X_batch)
+                    perdida = self.calcular_perdida_focal(y_pred, y_batch)
+                
+                variables = [
+                    self.W1, self.b1,
+                    self.W2, self.b2,
+                    self.W3, self.b3,
+                    self.alpha, self.beta, self.gamma, self.delta
+                ]
+                gradientes = tape.gradient(perdida, variables)
+                gradientes_clip = [tf.clip_by_value(g, -1.0, 1.0) if g is not None else g for g in gradientes]
+                
+                optimizer.apply_gradients(zip(gradientes_clip, variables))
+                
+                epoch_loss.append(perdida.numpy())
+                y_pred_batch = (y_pred > 0.5).numpy().astype(int)
+                epoch_acc.append(accuracy_score(y_batch.numpy(), y_pred_batch))
             
-            # Métricas
-            y_pred_train = (y_pred > 0.5).numpy().astype(int)
-            precision_train = accuracy_score(y_train.numpy(), y_pred_train)
+            # Métricas de época
+            perdida_train = np.mean(epoch_loss)
+            precision_train = np.mean(epoch_acc)
             
-            # Validación - CORREGIDO: ahora retorna 7 valores
-            y_pred_val, _, _, _, _, _, _ = self.forward(X_val)
+            # Validación
+            y_pred_val, h1_val, h2_val, _, _, _, _ = self.forward(X_val)
             perdida_val = self.calcular_perdida_focal(y_pred_val, y_val)
             y_pred_val_class = (y_pred_val > 0.5).numpy().astype(int)
             precision_val = accuracy_score(y_val.numpy(), y_pred_val_class)
             
             from sklearn.metrics import f1_score
-            f1_val = f1_score(y_val.numpy(), y_pred_val_class)
+            f1_val = f1_score(y_val.numpy(), y_pred_val_class, zero_division=0)
             
-            self.historial_perdida.append(perdida.numpy())
+            self.historial_perdida.append(perdida_train)
             self.historial_precision.append(precision_train)
             self.historial_perdida_val.append(perdida_val.numpy())
             self.historial_precision_val.append(precision_val)
@@ -318,15 +342,15 @@ class RedTresNodosMejorada:
                 'beta': self.beta.numpy(),
                 'gamma': self.gamma.numpy(),
                 'delta': self.delta.numpy(),
-                'h1_mean': tf.reduce_mean(h1).numpy(),
-                'h2_mean': tf.reduce_mean(h2).numpy(),
-                'h1_std': tf.math.reduce_std(h1).numpy(),
-                'h2_std': tf.math.reduce_std(h2).numpy()
+                'h1_mean': tf.reduce_mean(h1_val).numpy(),
+                'h2_mean': tf.reduce_mean(h2_val).numpy(),
+                'h1_std': tf.math.reduce_std(h1_val).numpy(),
+                'h2_std': tf.math.reduce_std(h2_val).numpy()
             })
             
             if verbose and (epoch + 1) % 50 == 0:
                 print(f"Epoch {epoch+1}/{epochs}")
-                print(f"  Train → Loss: {perdida:.4f} | Acc: {precision_train:.4f}")
+                print(f"  Train → Loss: {perdida_train:.4f} | Acc: {precision_train:.4f}")
                 print(f"  Val   → Loss: {perdida_val:.4f} | Acc: {precision_val:.4f} | F1: {f1_val:.4f}")
                 print(f"  NODO 3 → α={self.alpha.numpy():.3f} | β={self.beta.numpy():.3f} | γ={self.gamma.numpy():.3f} | δ={self.delta.numpy():.3f}\n")
             
@@ -336,7 +360,7 @@ class RedTresNodosMejorada:
             else:
                 sin_mejora += 1
                 if sin_mejora >= paciencia:
-                    print(f"✓ Early stopping (Mejor F1: {mejor_f1:.4f})")
+                    print(f"✓ Early stopping en época {epoch+1} (Mejor F1: {mejor_f1:.4f})")
                     break
         
         print(f"\n✓ ENTRENAMIENTO COMPLETADO")
@@ -691,11 +715,11 @@ def main():
     red = RedTresNodosMejorada(
         num_entradas=X.shape[1],
         class_weights=class_weights,
-        learning_rate=0.0005
+        learning_rate=0.001  # AUMENTADO de 0.0005 a 0.001
     )
     
-    # Entrenar
-    red.entrenar(X_train, y_train, X_val, y_val, epochs=500, verbose=True)
+    # Entrenar CON BATCH TRAINING
+    red.entrenar(X_train, y_train, X_val, y_val, epochs=500, batch_size=1024, verbose=True)
     
     # Evaluar
     precision, matriz = red.evaluar(X_test, y_test)
