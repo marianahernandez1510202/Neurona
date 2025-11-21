@@ -111,25 +111,26 @@ def preparar_dataset(df_procesado):
     print(f"\nDataset: {X.shape[0]} muestras, {X.shape[1]} características")
     print(f"Fumadores: {int(y.sum())} ({(y.sum()/len(y))*100:.1f}%)")
     
-    # Pesos balanceados pero suavizados
+    # CAMBIO: Pesos más conservadores para evitar predicción constante
     class_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=y)
-    class_weights = np.sqrt(class_weights)  # Suavizar
+    class_weights = class_weights * 0.6  # Suavizar más agresivamente
     
-    print(f"\n⚖️ PESOS SUAVIZADOS:")
+    print(f"\n⚖️ PESOS AJUSTADOS:")
     print(f"  No Fumador: {class_weights[0]:.3f}")
     print(f"  Fumador:    {class_weights[1]:.3f}")
     
     return X, y, caracteristicas, class_weights
 
 # ============================================
-# RED NEURONAL CON EXACTAMENTE 2 NODOS
+# RED NEURONAL CON EXACTAMENTE 3 NODOS
 # ============================================
 
-class RedDosNodosMejorada:
+class RedTresNodosMejorada:
     """
-    Red con EXACTAMENTE 2 NODOS:
-    - NODO 1: Capa oculta (1 neurona)
-    - NODO 2: Capa salida (1 neurona) con operaciones matemáticas
+    Red con EXACTAMENTE 3 NODOS:
+    - NODO 1: Capa oculta (2 neuronas) - Extrae patrones
+    - NODO 2: Capa intermedia (1 neurona) - Combina patrones
+    - NODO 3: Capa salida (1 neurona) - Operaciones matemáticas con pesos ajustables
     """
     
     def __init__(self, num_entradas, class_weights, learning_rate=0.001):
@@ -140,24 +141,32 @@ class RedDosNodosMejorada:
         # Inicialización He
         limit = np.sqrt(2.0 / num_entradas)
         
-        # NODO 1: Capa oculta (1 NEURONA)
+        # NODO 1: Capa oculta (2 NEURONAS)
         self.W1 = tf.Variable(
-            tf.random.uniform([num_entradas, 1], -limit, limit),
+            tf.random.uniform([num_entradas, 2], -limit, limit),
             name='W1_nodo1', trainable=True
         )
-        self.b1 = tf.Variable(tf.zeros([1]), name='b1_nodo1', trainable=True)
+        self.b1 = tf.Variable(tf.zeros([2]), name='b1_nodo1', trainable=True)
         
-        # NODO 2: Capa salida (1 NEURONA)
+        # NODO 2: Capa intermedia (1 NEURONA)
         self.W2 = tf.Variable(
-            tf.random.uniform([1, 1], -limit, limit),
+            tf.random.uniform([2, 1], -limit, limit),
             name='W2_nodo2', trainable=True
         )
         self.b2 = tf.Variable(tf.zeros([1]), name='b2_nodo2', trainable=True)
         
-        # Parámetros de operaciones matemáticas en NODO 2
-        self.alpha = tf.Variable(1.0, name='alpha_nodo2', trainable=True)
-        self.beta = tf.Variable(1.0, name='beta_nodo2', trainable=True)
-        self.gamma = tf.Variable(0.5, name='gamma_nodo2', trainable=True)
+        # NODO 3: Capa salida (1 NEURONA) con operaciones matemáticas
+        self.W3 = tf.Variable(
+            tf.random.uniform([1, 1], -limit, limit),
+            name='W3_nodo3', trainable=True
+        )
+        self.b3 = tf.Variable(tf.zeros([1]), name='b3_nodo3', trainable=True)
+        
+        # Parámetros de operaciones matemáticas en NODO 3 (PESOS AJUSTABLES)
+        self.alpha = tf.Variable(1.0, name='alpha_nodo3', trainable=True)
+        self.beta = tf.Variable(1.0, name='beta_nodo3', trainable=True)
+        self.gamma = tf.Variable(0.5, name='gamma_nodo3', trainable=True)
+        self.delta = tf.Variable(0.3, name='delta_nodo3', trainable=True)
         
         self.historial_perdida = []
         self.historial_precision = []
@@ -166,47 +175,59 @@ class RedDosNodosMejorada:
         self.historial_f1_val = []
         self.historial_operaciones = []
         
-        print(f"\n🧠 RED CON EXACTAMENTE 2 NODOS")
+        print(f"\n🧠 RED CON EXACTAMENTE 3 NODOS")
         print(f"="*60)
-        print(f"NODO 1 (Oculta): {num_entradas} entradas → 1 neurona")
-        print(f"NODO 2 (Salida): 1 entrada → 1 neurona + operaciones matemáticas")
-        print(f"  • Operaciones en Nodo 2: α, β, γ, potencias, productos")
+        print(f"NODO 1 (Oculta):     {num_entradas} entradas → 2 neuronas (tanh)")
+        print(f"NODO 2 (Intermedia): 2 entradas → 1 neurona (ReLU)")
+        print(f"NODO 3 (Salida):     1 entrada → 1 neurona + operaciones matemáticas")
+        print(f"  • Pesos ajustables en Nodo 3: α, β, γ, δ")
+        print(f"  • Operaciones: potencias, productos, exponenciales")
         print(f"Learning rate: {learning_rate}")
         print(f"="*60)
     
     def forward(self, X):
-        """Forward pass con EXACTAMENTE 2 NODOS"""
-        # NODO 1: Transformación de entrada
+        """Forward pass con EXACTAMENTE 3 NODOS"""
+        
+        # NODO 1: Extracción de características (2 neuronas)
         z1 = tf.matmul(X, self.W1) + self.b1
-        h1 = tf.nn.tanh(z1)  # tanh para rango [-1, 1]
+        h1 = tf.nn.tanh(z1)  # Salida: (batch_size, 2)
         
-        # NODO 2: Operaciones matemáticas avanzadas
+        # NODO 2: Combinación intermedia (1 neurona)
+        z2 = tf.matmul(h1, self.W2) + self.b2
+        h2 = tf.nn.relu(z2)  # ReLU para mantener valores positivos
+        
+        # NODO 3: Operaciones matemáticas avanzadas con PESOS AJUSTABLES
+        
         # Operación 1: Combinación lineal base
-        z2_base = tf.matmul(h1, self.W2) + self.b2
+        z3_base = tf.matmul(h2, self.W3) + self.b3
         
-        # Operación 2: Potencia ajustable
+        # Operación 2: Potencia ajustable (con peso β)
         beta_clip = tf.clip_by_value(self.beta, 0.3, 3.0)
-        h1_abs = tf.abs(h1)
-        h1_powered = tf.pow(h1_abs + 1e-7, beta_clip)
+        h2_abs = tf.abs(h2)
+        h2_powered = tf.pow(h2_abs + 1e-7, beta_clip)
         
-        # Operación 3: Componente cuadrático
-        h1_squared = tf.square(h1)
+        # Operación 3: Componente cuadrático (con peso γ)
+        h2_squared = tf.square(h2)
         
-        # Operación 4: Producto de Hadamard
-        hadamard = h1 * h1_powered
+        # Operación 4: Exponencial suavizada (con peso δ)
+        h2_exp = tf.exp(tf.clip_by_value(h2 * 0.5, -2, 2))
         
-        # Operación 5: Combinación no lineal avanzada
-        z2_enhanced = (
-            z2_base + 
-            self.alpha * h1_powered + 
-            self.gamma * h1_squared +
+        # Operación 5: Producto de Hadamard
+        hadamard = h2 * h2_powered
+        
+        # Operación 6: Combinación no lineal con TODOS los pesos ajustables
+        z3_enhanced = (
+            z3_base + 
+            self.alpha * h2_powered +
+            self.gamma * h2_squared +
+            self.delta * h2_exp +
             0.1 * hadamard
         )
         
-        # Operación 6: Sigmoid
-        y_pred = tf.sigmoid(z2_enhanced)
+        # Operación 7: Sigmoid final
+        y_pred = tf.sigmoid(z3_enhanced)
         
-        return y_pred, h1, z2_base, h1_powered, h1_squared, hadamard
+        return y_pred, h1, h2, h2_powered, h2_squared, h2_exp, hadamard
     
     def calcular_perdida_focal(self, y_pred, y_real, gamma=2.0):
         """Focal Loss para manejar desbalance"""
@@ -236,16 +257,19 @@ class RedDosNodosMejorada:
         # Regularización L2
         l2_loss = 0.0001 * (
             tf.reduce_sum(tf.square(self.W1)) + 
-            tf.reduce_sum(tf.square(self.W2))
+            tf.reduce_sum(tf.square(self.W2)) +
+            tf.reduce_sum(tf.square(self.W3))
         )
         
         return tf.reduce_mean(weighted_loss) + l2_loss
     
-    def entrenar(self, X_train, y_train, X_val, y_val, epochs=500, verbose=True):
-        print(f"\n⚡ ENTRENAMIENTO - 2 NODOS CON FOCAL LOSS\n")
+    def entrenar(self, X_train, y_train, X_val, y_val, epochs=500, batch_size=1024, verbose=True):
+        print(f"\n⚡ ENTRENAMIENTO - 3 NODOS CON FOCAL LOSS + BATCH TRAINING\n")
+        print(f"Batch size: {batch_size}")
         
-        X_train = tf.constant(X_train, dtype=tf.float32)
-        y_train = tf.constant(y_train.reshape(-1, 1), dtype=tf.float32)
+        # Mantener numpy para batches
+        X_train_np = X_train
+        y_train_np = y_train.reshape(-1, 1)
         X_val = tf.constant(X_val, dtype=tf.float32)
         y_val = tf.constant(y_val.reshape(-1, 1), dtype=tf.float32)
         
@@ -253,33 +277,61 @@ class RedDosNodosMejorada:
         
         mejor_f1 = 0.0
         sin_mejora = 0
-        paciencia = 50
+        paciencia = 100  # Aumentado
+        
+        num_batches = len(X_train_np) // batch_size
+        print(f"Batches por época: {num_batches}\n")
         
         for epoch in range(epochs):
-            with tf.GradientTape() as tape:
-                y_pred, h1, z2_base, h1_pow, h1_sq, hadam = self.forward(X_train)
-                perdida = self.calcular_perdida_focal(y_pred, y_train)
+            # Mezclar datos cada época
+            indices = np.random.permutation(len(X_train_np))
+            X_train_shuffled = X_train_np[indices]
+            y_train_shuffled = y_train_np[indices]
             
-            variables = [self.W1, self.b1, self.W2, self.b2, self.alpha, self.beta, self.gamma]
-            gradientes = tape.gradient(perdida, variables)
-            gradientes_clip = [tf.clip_by_value(g, -1.0, 1.0) if g is not None else g for g in gradientes]
+            epoch_loss = []
+            epoch_acc = []
             
-            optimizer.apply_gradients(zip(gradientes_clip, variables))
+            # Entrenar por batches
+            for i in range(num_batches):
+                start_idx = i * batch_size
+                end_idx = start_idx + batch_size
+                
+                X_batch = tf.constant(X_train_shuffled[start_idx:end_idx], dtype=tf.float32)
+                y_batch = tf.constant(y_train_shuffled[start_idx:end_idx], dtype=tf.float32)
+                
+                with tf.GradientTape() as tape:
+                    y_pred, h1, h2, h2_pow, h2_sq, h2_exp, hadam = self.forward(X_batch)
+                    perdida = self.calcular_perdida_focal(y_pred, y_batch)
+                
+                variables = [
+                    self.W1, self.b1,
+                    self.W2, self.b2,
+                    self.W3, self.b3,
+                    self.alpha, self.beta, self.gamma, self.delta
+                ]
+                gradientes = tape.gradient(perdida, variables)
+                gradientes_clip = [tf.clip_by_value(g, -1.0, 1.0) if g is not None else g for g in gradientes]
+                
+                optimizer.apply_gradients(zip(gradientes_clip, variables))
+                
+                epoch_loss.append(perdida.numpy())
+                y_pred_batch = (y_pred > 0.5).numpy().astype(int)
+                epoch_acc.append(accuracy_score(y_batch.numpy(), y_pred_batch))
             
-            # Métricas
-            y_pred_train = (y_pred > 0.5).numpy().astype(int)
-            precision_train = accuracy_score(y_train.numpy(), y_pred_train)
+            # Métricas de época
+            perdida_train = np.mean(epoch_loss)
+            precision_train = np.mean(epoch_acc)
             
             # Validación
-            y_pred_val, _, _, _, _, _ = self.forward(X_val)
+            y_pred_val, h1_val, h2_val, _, _, _, _ = self.forward(X_val)
             perdida_val = self.calcular_perdida_focal(y_pred_val, y_val)
             y_pred_val_class = (y_pred_val > 0.5).numpy().astype(int)
             precision_val = accuracy_score(y_val.numpy(), y_pred_val_class)
             
             from sklearn.metrics import f1_score
-            f1_val = f1_score(y_val.numpy(), y_pred_val_class)
+            f1_val = f1_score(y_val.numpy(), y_pred_val_class, zero_division=0)
             
-            self.historial_perdida.append(perdida.numpy())
+            self.historial_perdida.append(perdida_train)
             self.historial_precision.append(precision_train)
             self.historial_perdida_val.append(perdida_val.numpy())
             self.historial_precision_val.append(precision_val)
@@ -289,15 +341,18 @@ class RedDosNodosMejorada:
                 'alpha': self.alpha.numpy(),
                 'beta': self.beta.numpy(),
                 'gamma': self.gamma.numpy(),
-                'h1_mean': tf.reduce_mean(h1).numpy(),
-                'h1_std': tf.math.reduce_std(h1).numpy()
+                'delta': self.delta.numpy(),
+                'h1_mean': tf.reduce_mean(h1_val).numpy(),
+                'h2_mean': tf.reduce_mean(h2_val).numpy(),
+                'h1_std': tf.math.reduce_std(h1_val).numpy(),
+                'h2_std': tf.math.reduce_std(h2_val).numpy()
             })
             
             if verbose and (epoch + 1) % 50 == 0:
                 print(f"Epoch {epoch+1}/{epochs}")
-                print(f"  Train → Loss: {perdida:.4f} | Acc: {precision_train:.4f}")
+                print(f"  Train → Loss: {perdida_train:.4f} | Acc: {precision_train:.4f}")
                 print(f"  Val   → Loss: {perdida_val:.4f} | Acc: {precision_val:.4f} | F1: {f1_val:.4f}")
-                print(f"  NODO 2 → α={self.alpha.numpy():.3f} | β={self.beta.numpy():.3f} | γ={self.gamma.numpy():.3f}\n")
+                print(f"  NODO 3 → α={self.alpha.numpy():.3f} | β={self.beta.numpy():.3f} | γ={self.gamma.numpy():.3f} | δ={self.delta.numpy():.3f}\n")
             
             if f1_val > mejor_f1:
                 mejor_f1 = f1_val
@@ -305,19 +360,20 @@ class RedDosNodosMejorada:
             else:
                 sin_mejora += 1
                 if sin_mejora >= paciencia:
-                    print(f"✓ Early stopping (Mejor F1: {mejor_f1:.4f})")
+                    print(f"✓ Early stopping en época {epoch+1} (Mejor F1: {mejor_f1:.4f})")
                     break
         
         print(f"\n✓ ENTRENAMIENTO COMPLETADO")
         print(f"  Mejor F1-Score: {mejor_f1:.4f}")
-        print(f"  Parámetros finales Nodo 2:")
+        print(f"  Parámetros finales Nodo 3:")
         print(f"    α = {self.alpha.numpy():.4f}")
         print(f"    β = {self.beta.numpy():.4f}")
         print(f"    γ = {self.gamma.numpy():.4f}")
+        print(f"    δ = {self.delta.numpy():.4f}")
     
     def predecir(self, X):
         X_tensor = tf.constant(X, dtype=tf.float32)
-        y_pred, _, _, _, _, _ = self.forward(X_tensor)
+        y_pred, _, _, _, _, _, _ = self.forward(X_tensor)
         probabilidades = y_pred.numpy()
         predicciones = (probabilidades > 0.5).astype(int)
         return probabilidades, predicciones
@@ -333,7 +389,7 @@ class RedDosNodosMejorada:
         recall = recall_score(y_test, predicciones)
         precision_score_val = precision_score(y_test, predicciones)
         
-        print("\n📊 EVALUACIÓN FINAL - 2 NODOS")
+        print("\n📊 EVALUACIÓN FINAL - 3 NODOS")
         print(f"Accuracy:   {precision:.4f} ({precision*100:.2f}%)")
         print(f"F1-Score:   {f1:.4f}")
         print(f"Recall:     {recall:.4f} (% fumadores detectados)")
@@ -371,7 +427,6 @@ def graficar_dispersion_datos(X, y, caracteristicas):
         ]
         axes[i].legend(handles=legend_elements, loc='upper right', fontsize=9)
     
-    # Ocultar axes sobrantes
     for idx in range(num_features, 6):
         axes[idx].axis('off')
     
@@ -414,7 +469,6 @@ def graficar_dispersion_2d(X, y, caracteristicas):
             if pair_idx >= 6:
                 break
     
-    # Ocultar axes sobrantes
     for idx in range(pair_idx, 6):
         axes[idx].axis('off')
     
@@ -428,7 +482,6 @@ def graficar_dispersion_residuales(y_test, probabilidades):
     """Gráfica de dispersión de ajustes vs valores reales y residuales"""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
     
-    # Gráfica 1: Predicción vs Real
     colores = ['blue' if y == 0 else 'red' for y in y_test]
     ax1.scatter(y_test, probabilidades, alpha=0.6, s=50, c=colores, edgecolors='black', linewidth=0.5)
     ax1.plot([0, 1], [0, 1], 'r--', linewidth=2, label='Predicción Perfecta')
@@ -441,7 +494,6 @@ def graficar_dispersion_residuales(y_test, probabilidades):
     ax1.set_xlim([-0.1, 1.1])
     ax1.set_ylim([-0.1, 1.1])
     
-    # Gráfica 2: Residuales
     residuales = y_test - probabilidades.flatten()
     ax2.scatter(probabilidades, residuales, alpha=0.6, s=50, c=colores, edgecolors='black', linewidth=0.5)
     ax2.axhline(y=0, color='red', linestyle='--', linewidth=2, label='Residual = 0')
@@ -506,17 +558,17 @@ def graficar_distribucion_final(probabilidades, y_test):
     
     ax.set_xlabel('Probabilidad de ser Fumador', fontsize=13, fontweight='bold')
     ax.set_ylabel('Frecuencia', fontsize=13, fontweight='bold')
-    ax.set_title('Distribución - RED DE 2 NODOS', fontsize=15, fontweight='bold')
+    ax.set_title('Distribución - RED DE 3 NODOS', fontsize=15, fontweight='bold')
     ax.legend(fontsize=12)
     ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
-    plt.savefig('distribucion_2_nodos.png', dpi=300, bbox_inches='tight')
+    plt.savefig('distribucion_3_nodos.png', dpi=300, bbox_inches='tight')
     plt.show()
-    print("✓ Gráfica guardada: distribucion_2_nodos.png")
+    print("✓ Gráfica guardada: distribucion_3_nodos.png")
 
 
-def graficar_matriz_confusion_2nodos(matriz_conf):
+def graficar_matriz_confusion_3nodos(matriz_conf):
     """Matriz de confusión"""
     fig, ax = plt.subplots(figsize=(9, 7))
     
@@ -527,57 +579,69 @@ def graficar_matriz_confusion_2nodos(matriz_conf):
     
     ax.set_xlabel('Predicción', fontsize=13, fontweight='bold')
     ax.set_ylabel('Valor Real', fontsize=13, fontweight='bold')
-    ax.set_title('Matriz de Confusión - 2 NODOS', fontsize=15, fontweight='bold', pad=20)
+    ax.set_title('Matriz de Confusión - 3 NODOS', fontsize=15, fontweight='bold', pad=20)
     
     plt.tight_layout()
-    plt.savefig('matriz_2_nodos.png', dpi=300, bbox_inches='tight')
+    plt.savefig('matriz_3_nodos.png', dpi=300, bbox_inches='tight')
     plt.show()
-    print("✓ Gráfica guardada: matriz_2_nodos.png")
+    print("✓ Gráfica guardada: matriz_3_nodos.png")
 
 
-def graficar_operaciones_nodo2(red):
-    """Gráfica de las operaciones matemáticas del Nodo 2"""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+def graficar_operaciones_nodo3(red):
+    """Gráfica de las operaciones matemáticas del Nodo 3"""
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    axes = axes.ravel()
     
     epochs = range(1, len(red.historial_operaciones) + 1)
     
     alphas = [op['alpha'] for op in red.historial_operaciones]
     betas = [op['beta'] for op in red.historial_operaciones]
     gammas = [op['gamma'] for op in red.historial_operaciones]
-    h1_means = [op['h1_mean'] for op in red.historial_operaciones]
+    deltas = [op['delta'] for op in red.historial_operaciones]
+    h2_means = [op['h2_mean'] for op in red.historial_operaciones]
     
     # Alpha
     axes[0, 0].plot(epochs, alphas, 'b-', linewidth=2)
     axes[0, 0].set_xlabel('Época')
     axes[0, 0].set_ylabel('α')
-    axes[0, 0].set_title('Evolución de α (Nodo 2)', fontweight='bold')
+    axes[0, 0].set_title('Evolución de α (Nodo 3)', fontweight='bold')
     axes[0, 0].grid(True, alpha=0.3)
     
     # Beta
     axes[0, 1].plot(epochs, betas, 'g-', linewidth=2)
     axes[0, 1].set_xlabel('Época')
     axes[0, 1].set_ylabel('β')
-    axes[0, 1].set_title('Evolución de β (Nodo 2)', fontweight='bold')
+    axes[0, 1].set_title('Evolución de β (Nodo 3)', fontweight='bold')
     axes[0, 1].grid(True, alpha=0.3)
     
     # Gamma
     axes[1, 0].plot(epochs, gammas, 'r-', linewidth=2)
     axes[1, 0].set_xlabel('Época')
     axes[1, 0].set_ylabel('γ')
-    axes[1, 0].set_title('Evolución de γ (Nodo 2)', fontweight='bold')
+    axes[1, 0].set_title('Evolución de γ (Nodo 3)', fontweight='bold')
     axes[1, 0].grid(True, alpha=0.3)
     
-    # Salida Nodo 1
-    axes[1, 1].plot(epochs, h1_means, 'm-', linewidth=2)
+    # Delta
+    axes[1, 1].plot(epochs, deltas, 'orange', linewidth=2)
     axes[1, 1].set_xlabel('Época')
-    axes[1, 1].set_ylabel('Salida media h₁')
-    axes[1, 1].set_title('Salida promedio del Nodo 1', fontweight='bold')
+    axes[1, 1].set_ylabel('δ')
+    axes[1, 1].set_title('Evolución de δ (Nodo 3)', fontweight='bold')
     axes[1, 1].grid(True, alpha=0.3)
     
+    # Salida Nodo 2
+    axes[0, 2].plot(epochs, h2_means, 'm-', linewidth=2)
+    axes[0, 2].set_xlabel('Época')
+    axes[0, 2].set_ylabel('Salida media h₂')
+    axes[0, 2].set_title('Salida promedio del Nodo 2', fontweight='bold')
+    axes[0, 2].grid(True, alpha=0.3)
+    
+    # Ocultar el último subplot
+    axes[1, 2].axis('off')
+    
     plt.tight_layout()
-    plt.savefig('operaciones_nodo2.png', dpi=300, bbox_inches='tight')
+    plt.savefig('operaciones_nodo3.png', dpi=300, bbox_inches='tight')
     plt.show()
-    print("✓ Gráfica guardada: operaciones_nodo2.png")
+    print("✓ Gráfica guardada: operaciones_nodo3.png")
 
 
 def graficar_entrenamiento(red):
@@ -607,16 +671,16 @@ def graficar_entrenamiento(red):
     axes[1].set_ylim([0, 1])
     
     plt.tight_layout()
-    plt.savefig('entrenamiento_2_nodos.png', dpi=300, bbox_inches='tight')
+    plt.savefig('entrenamiento_3_nodos.png', dpi=300, bbox_inches='tight')
     plt.show()
-    print("✓ Gráfica guardada: entrenamiento_2_nodos.png")
+    print("✓ Gráfica guardada: entrenamiento_3_nodos.png")
 
 # ============================================
 # FUNCIÓN PRINCIPAL
 # ============================================
 
 def main():
-    print("\n🧠 RED NEURONAL CON EXACTAMENTE 2 NODOS")
+    print("\n🧠 RED NEURONAL CON EXACTAMENTE 3 NODOS")
     print("="*60)
     
     db = conectar_mongodb()
@@ -647,15 +711,15 @@ def main():
     graficar_dispersion_2d(X, y, caracteristicas)
     graficar_correlacion_caracteristicas(X, caracteristicas)
     
-    # Crear red con 2 NODOS
-    red = RedDosNodosMejorada(
+    # Crear red con 3 NODOS
+    red = RedTresNodosMejorada(
         num_entradas=X.shape[1],
         class_weights=class_weights,
-        learning_rate=0.0005
+        learning_rate=0.001  # AUMENTADO de 0.0005 a 0.001
     )
     
-    # Entrenar
-    red.entrenar(X_train, y_train, X_val, y_val, epochs=500, verbose=True)
+    # Entrenar CON BATCH TRAINING
+    red.entrenar(X_train, y_train, X_val, y_val, epochs=500, batch_size=1024, verbose=True)
     
     # Evaluar
     precision, matriz = red.evaluar(X_test, y_test)
@@ -680,24 +744,30 @@ def main():
     
     graficar_dispersion_residuales(y_test, probs_completas)
     graficar_distribucion_final(probs_completas, y_test)
-    graficar_matriz_confusion_2nodos(matriz)
-    graficar_operaciones_nodo2(red)
+    graficar_matriz_confusion_3nodos(matriz)
+    graficar_operaciones_nodo3(red)
     graficar_entrenamiento(red)
     
     print("\n" + "="*60)
-    print("✅ RED DE 2 NODOS ENTRENADA")
-    print(f"NODO 1: {red.num_entradas} → 1 (tanh)")
-    print(f"NODO 2: 1 → 1 (α, β, γ + operaciones)")
-    print(f"Total: EXACTAMENTE 2 NODOS")
+    print("✅ RED DE 3 NODOS ENTRENADA")
+    print(f"NODO 1: {red.num_entradas} → 2 (tanh)")
+    print(f"NODO 2: 2 → 1 (relu)")
+    print(f"NODO 3: 1 → 1 (α, β, γ, δ + operaciones)")
+    print(f"Total: EXACTAMENTE 3 NODOS")
+    print(f"Pesos ajustables en Nodo 3:")
+    print(f"  α = {red.alpha.numpy():.4f}")
+    print(f"  β = {red.beta.numpy():.4f}")
+    print(f"  γ = {red.gamma.numpy():.4f}")
+    print(f"  δ = {red.delta.numpy():.4f}")
     print("\n📊 GRÁFICAS GENERADAS:")
     print("  1. dispersion_datos.png")
     print("  2. dispersion_2d_pares.png")
     print("  3. correlacion_caracteristicas.png")
     print("  4. dispersion_residuales.png")
-    print("  5. distribucion_2_nodos.png")
-    print("  6. matriz_2_nodos.png")
-    print("  7. operaciones_nodo2.png")
-    print("  8. entrenamiento_2_nodos.png")
+    print("  5. distribucion_3_nodos.png")
+    print("  6. matriz_3_nodos.png")
+    print("  7. operaciones_nodo3.png")
+    print("  8. entrenamiento_3_nodos.png")
     print("="*60)
 
 if __name__ == "__main__":
